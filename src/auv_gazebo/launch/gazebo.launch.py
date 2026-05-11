@@ -8,7 +8,7 @@ from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             OpaqueFunction, SetEnvironmentVariable)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, FindExecutable
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -56,7 +56,7 @@ def _launch_setup(context, *args, **kwargs):
 
     robot_description = {
         'robot_description': ParameterValue(
-            Command(['xacro ', xacro_file]), value_type=str)
+            Command([FindExecutable(name='xacro'), ' ', xacro_file]), value_type=str)
     }
     rsp = Node(
         package='robot_state_publisher',
@@ -87,7 +87,8 @@ def _launch_setup(context, *args, **kwargs):
         # Defensively disable Gazebo Fuel online lookups so slow/blocked
         # networks can never stall the sim startup.
         SetEnvironmentVariable('IGN_FUEL_ENABLE_CACHING', '0'),
-        gzserver, gzclient, rsp, spawner,
+        gzserver, gzclient, 
+        rsp, spawner,
     ]
 
 

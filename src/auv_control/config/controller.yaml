@@ -9,12 +9,12 @@ auv_controller:
     # Outer loop (position -> velocity reference) gains
     kp_surge:             0.6
     kp_heave:             0.5
-    kp_yaw:               1.0
-    cruise_speed:         0.6
+    kp_yaw:               2.0
+    cruise_speed:         0.4
     waypoint_radius:      0.8
 
     # Trajectory: hold | waypoints | lawnmower | figure8 | circle
-    trajectory:        "lawnmower"
+    trajectory:        "waypoints"
     traj_scale:           6.0    # m
     traj_depth:          -3.0    # m
 

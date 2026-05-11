@@ -57,7 +57,7 @@ class ThrustAllocator {
   // Accounts for actuator-effectiveness reduction:  tau_actual = B * diag(f) * u.
   WrenchVec actual_wrench(const ControlVec & u_cmd) const;
 
-  const Eigen::Matrix<double, 5, 4> & B() const { return B_; }
+  const Eigen::Matrix<double, 4, 4> & B() const { return B_; }
 
   // Last-computed diagnostic info.
   std::string last_report() const { return report_; }
@@ -68,16 +68,12 @@ class ThrustAllocator {
 
   // Active-set QP on box-constrained least squares:
   //   min (1/2) v^T v   s.t.  B v = tau_des,  u_min <= v <= u_max.
-  //
-  // Starts from the pseudo-inverse point, then for each violated bound
-  // "pins" that variable and re-solves the reduced equality-constrained
-  // subproblem, iterating until all residual KKT conditions hold.
   ControlVec solve_qp(const WrenchVec & tau_des,
                       double u_min, double u_max,
                       bool * converged) const;
 
   AllocParams                geom_;
-  Eigen::Matrix<double, 5, 4> B_;
+  Eigen::Matrix<double, 4, 4> B_;
   Eigen::Matrix<double, 4, 4> W_;     // priority matrix (diagonal)
   std::array<double, 4>      fault_;  // f_1..f_4 in [0, 1]
   mutable std::string        report_;

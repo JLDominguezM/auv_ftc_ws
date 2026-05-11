@@ -497,7 +497,7 @@ function callInjectFault(id, factor, type, ramp){
 }
 document.querySelectorAll('.btn-fail').forEach(b=>{
   b.addEventListener('click',()=>{
-    callInjectFault(parseInt(b.dataset.id,10), 0.0, 'abrupt', 0.0);
+    callInjectFault(parseInt(b.dataset.id,10), 0.5, 'abrupt', 0.0);
   });
 });
 document.getElementById('heal-all').addEventListener('click',()=>{

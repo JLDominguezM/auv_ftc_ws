@@ -25,7 +25,7 @@ def generate_launch_description():
     # Small delay so Gazebo has time to spawn the AUV and start publishing
     # /auv/odom before the controller starts its 50 Hz loop.
     controller_launch = TimerAction(
-        period=3.0,
+        period=0.5,
         actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(PathJoinSubstitution([

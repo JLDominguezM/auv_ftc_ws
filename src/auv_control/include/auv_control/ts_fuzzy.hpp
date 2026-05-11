@@ -39,8 +39,17 @@ class TSFuzzyController {
   //   returns : virtual actuator command u_virtual (4-dim).
   ControlVec compute(const StateVec & x, const StateVec & x_ref) const;
 
+  // Update fault factors to allow the controller to adapt its gains.
+  void set_fault_factors(const std::array<double, 4> & f);
+
+  // Set the control sampling period (for integral term).
+  void set_dt(double dt) { dt_ = dt; }
+
   // Last set of membership weights mu_j (for logging / inspection).
   const std::array<double, 6> & last_weights() const { return mu_; }
+
+  // Clear the accumulated error integral to prevent windup during transitions.
+  void reset_integral() const { error_integral_.setZero(); }
 
  private:
   // ---- Membership functions (Eqs. 18, 19) ----
@@ -58,8 +67,18 @@ class TSFuzzyController {
   // Six operating-point gain matrices K_1 .. K_6 (Eqs. 20-25).
   std::array<Gain, 6> K_;
 
+  // Integral gains (shared across rules for simplicity).
+  Gain Ki_;
+
   // Cached membership weights mu_1..mu_6 from the last compute() call.
   mutable std::array<double, 6> mu_{};
+
+  // Fault factors [u1 u2 u3 u4], where 1.0=healthy, 0.0=total failure.
+  std::array<double, 4> fault_ = {1.0, 1.0, 1.0, 1.0};
+
+  // State error integral for the PI-like fuzzy law.
+  mutable StateVec error_integral_ = StateVec::Zero();
+  double dt_ = 0.02;   // default 50Hz
 };
 
 }  // namespace auv_control

@@ -39,42 +39,40 @@ void ThrustAllocator::set_fault_factors(const std::array<double, 4> & f) {
 }
 
 // ---------------------------------------------------------------------------
-//  Weighted pseudo-inverse (Eq. 37):
-//        T = W^{-1} B^T (B W^{-1} B^T)^{-1} tau
+//  Weighted pseudo-inverse (Eq. 37, updated for fault effectiveness F):
+//        B_eff = B * diag(f)
+//        u = W^{-1} B_eff^T (B_eff W^{-1} B_eff^T)^{-1} tau
 // ---------------------------------------------------------------------------
 ControlVec ThrustAllocator::pseudo_inverse(const WrenchVec & tau) const {
+  Eigen::Matrix<double, 4, 4> Beff = B_;
+  for (int j = 0; j < 4; ++j) Beff.col(j) *= fault_[j];
+
   const Eigen::Matrix<double, 4, 4> Winv = W_.inverse();
-  const Eigen::Matrix<double, 5, 5> M    = B_ * Winv * B_.transpose();
-  // Use LDLT for the small 5x5 SPD system (fast + stable).
-  Eigen::Matrix<double, 5, 1> lambda =
-      M.ldlt().solve(tau);
-  return Winv * B_.transpose() * lambda;
+  const Eigen::Matrix<double, 4, 4> M    = Beff * Winv * Beff.transpose();
+  
+  // Use LDLT for the 4x4 square system.
+  const Eigen::Matrix<double, 4, 4> M_reg = M + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
+  Eigen::Matrix<double, 4, 1> lambda = M_reg.ldlt().solve(tau);
+  return Winv * Beff.transpose() * lambda;
 }
 
 // ---------------------------------------------------------------------------
 //  Active-set QP:   min (1/2)||v||^2
-//                   s.t.  B v  = tau_des
+//                   s.t.  B_eff v  = tau_des
 //                         u_min <= v <= u_max
-//
-//  Strategy: start from the pseudo-inverse solution. For any violated bound
-//  fix v_i to that bound and re-solve the reduced equality-constrained QP
-//  in the remaining free variables (KKT system, closed-form solve). Repeat
-//  until no bound is violated and all Lagrange multipliers on active bounds
-//  have the correct sign.
-//
-//  This is the practical realisation of Section 4.2, Eqs. (45)-(49), applied
-//  to box constraints (the "active set" is just the set of pinned indices).
 // ---------------------------------------------------------------------------
 ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
                                      double u_min, double u_max,
                                      bool * converged) const {
   if (converged) *converged = false;
 
-  // Start from the unweighted (plain) pseudo-inverse — the QP objective has
-  // no W, so start from the minimum-norm feasible point.
-  const Eigen::Matrix<double, 5, 5> BBT = B_ * B_.transpose();
-  Eigen::Matrix<double, 5, 1> lambda = BBT.ldlt().solve(tau_des);
-  ControlVec v = B_.transpose() * lambda;
+  Eigen::Matrix<double, 4, 4> Beff = B_;
+  for (int j = 0; j < 4; ++j) Beff.col(j) *= fault_[j];
+
+  // Start from the minimum-norm point of the effective system.
+  const Eigen::Matrix<double, 4, 4> M0 = Beff * Beff.transpose() + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
+  Eigen::Matrix<double, 4, 1> lambda = M0.ldlt().solve(tau_des);
+  ControlVec v = Beff.transpose() * lambda;
 
   // Active bounds tracker: 0 = free, -1 = pinned at u_min, +1 = pinned at u_max.
   std::array<int, 4> pin = {0, 0, 0, 0};
@@ -96,17 +94,11 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
     }
 
     if (worst_idx < 0) {
-      // Primal feasible. Check dual (sign of multipliers on pinned bounds).
-      // Multiplier on v_i = +u_max bound is -(gradient entry) when pin[i]=+1.
-      // Residual gradient of (1/2)||v||^2 - mu^T (Bv - tau) is v - B^T mu.
-      // Solve for mu: from free components, v_free - (B_free)^T mu = 0 => OK by construction.
-      // For bound i pinned at +u_max, dual multiplier is (v_i - (B_i)^T mu).
-      // If any multiplier has the "wrong" sign we free that bound.
-      const Eigen::Matrix<double, 5, 1> mu = lambda;
+      const Eigen::Matrix<double, 4, 1> mu = lambda;
       bool removed = false;
       for (int i = 0; i < 4; ++i) {
         if (pin[i] == 0) continue;
-        const double bi_mu = B_.col(i).dot(mu);
+        const double bi_mu = Beff.col(i).dot(mu);
         const double dual  = v(i) - bi_mu;   // grad-of-lagrangian balance
         if (pin[i] == +1 && dual <  -kEpsKKT) { pin[i] = 0; removed = true; break; }
         if (pin[i] == -1 && dual >   kEpsKKT) { pin[i] = 0; removed = true; break; }
@@ -120,34 +112,26 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
     }
 
     // -------- 2) Solve the reduced KKT system. ----------------------
-    // Pinned variables are fixed; free variables satisfy:
-    //     v_free = (B_free)^T lambda
-    //     B_free  v_free  =  tau_des  -  B_pin * v_pin
-    // =>  B_free (B_free)^T  lambda  =  tau_des - B_pin * v_pin
-    Eigen::Matrix<double, 5, 1> rhs = tau_des;
+    Eigen::Matrix<double, 4, 1> rhs = tau_des;
     for (int i = 0; i < 4; ++i) {
-      if (pin[i] == +1) { v(i) = u_max; rhs -= B_.col(i) * u_max; }
-      if (pin[i] == -1) { v(i) = u_min; rhs -= B_.col(i) * u_min; }
+      if (pin[i] == +1) { v(i) = u_max; rhs -= Beff.col(i) * u_max; }
+      if (pin[i] == -1) { v(i) = u_min; rhs -= Beff.col(i) * u_min; }
     }
 
-    // Build B_free with only the free columns.
     std::vector<int> free_idx;
-    free_idx.reserve(4);
     for (int i = 0; i < 4; ++i) if (pin[i] == 0) free_idx.push_back(i);
 
     if (free_idx.empty()) {
-      // All pinned — the equality B v = tau_des may not hold. Return v as-is.
-      if (converged) *converged = false;
+      if (converged) *converged = true;
       return v;
     }
 
-    Eigen::MatrixXd Bfree(5, free_idx.size());
+    Eigen::MatrixXd Bfree(4, free_idx.size());
     for (std::size_t k = 0; k < free_idx.size(); ++k) {
-      Bfree.col(k) = B_.col(free_idx[k]);
+      Bfree.col(k) = Beff.col(free_idx[k]);
     }
 
-    // Solve B_free B_free^T  lambda = rhs  (5x5 SPD for the equality part).
-    const Eigen::Matrix<double, 5, 5> M = Bfree * Bfree.transpose();
+    const Eigen::Matrix<double, 4, 4> M = Bfree * Bfree.transpose() + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
     lambda = M.ldlt().solve(rhs);
 
     Eigen::VectorXd vfree = Bfree.transpose() * lambda;
@@ -156,7 +140,7 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
     }
   }
 
-  return v;   // returned with converged=false (hit iteration cap)
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +166,7 @@ ControlVec ThrustAllocator::allocate(const WrenchVec & tau_des,
   bool ok = false;
   ControlVec u_qp = solve_qp(tau_des, u_min, u_max, &ok);
 
-  // Safety clamp — QP should satisfy bounds, but enforce in case of
-  // numerical drift.
+  // Safety clamp
   for (int i = 0; i < 4; ++i) {
     u_qp(i) = std::clamp(u_qp(i), u_min, u_max);
   }
@@ -196,10 +179,6 @@ ControlVec ThrustAllocator::allocate(const WrenchVec & tau_des,
   return u_qp;
 }
 
-// ---------------------------------------------------------------------------
-//  actual_wrench = B * diag(f) * u_cmd
-//      Models the paper's fault description (Eq. 33): a partially-failed
-//      actuator produces  f_i * u_cmd_i  worth of effective thrust.
 // ---------------------------------------------------------------------------
 WrenchVec ThrustAllocator::actual_wrench(const ControlVec & u_cmd) const {
   ControlVec u_eff;

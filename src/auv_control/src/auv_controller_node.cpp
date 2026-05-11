@@ -80,16 +80,17 @@ class AUVController : public rclcpp::Node {
     // Cascade outer-loop gains.
     declare_parameter("kp_surge",         0.6);
     declare_parameter("kp_heave",         0.5);
-    declare_parameter("kp_yaw",           1.0);
-    declare_parameter("cruise_speed",     0.6);
+    declare_parameter("kp_yaw",           2.0);
+    declare_parameter("cruise_speed",     0.5);
     declare_parameter("waypoint_radius",  0.8);
     // Trajectory generator.
-    declare_parameter<std::string>("trajectory", "lawnmower");
+    declare_parameter<std::string>("trajectory", "waypoints");
     declare_parameter("traj_scale",       6.0);
     declare_parameter("traj_depth",       -3.0);
 
     double rate_hz;
     get_parameter("control_rate_hz", rate_hz);
+    fuzzy_.set_dt(1.0 / std::max(rate_hz, 1.0));
     get_parameter("thrust_max",      veh_.thrust_max);
     get_parameter("thrust_min",      veh_.thrust_min);
     get_parameter("buoyancy_force",  veh_.buoyancy_force);
@@ -144,34 +145,61 @@ class AUVController : public rclcpp::Node {
   // ===== Callbacks ======================================================
   void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg) {
     std::lock_guard<std::mutex> lk(mtx_);
+
+    // Comprehensive NaN/Inf check for the incoming state
+    const auto & p = msg->pose.pose.position;
+    const auto & o = msg->pose.pose.orientation;
+    const auto & v = msg->twist.twist.linear;
+    const auto & a = msg->twist.twist.angular;
+
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+        !std::isfinite(o.x) || !std::isfinite(o.y) || !std::isfinite(o.z) || !std::isfinite(o.w) ||
+        !std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z) ||
+        !std::isfinite(a.x) || !std::isfinite(a.y) || !std::isfinite(a.z)) {
+      return;
+    }
+
     have_odom_ = true;
     odom_count_++;
 
     // Body-frame twist (REP-105: child_frame_id = base_link).
-    x_(0) = msg->twist.twist.linear.x;
-    x_(1) = msg->twist.twist.linear.y;
-    x_(2) = msg->twist.twist.linear.z;
-    x_(3) = msg->twist.twist.angular.y;
-    x_(4) = msg->twist.twist.angular.z;
-    p_roll_ = msg->twist.twist.angular.x;
+    x_(0) = v.x;
+    x_(1) = v.y;
+    x_(2) = v.z;
+    x_(3) = a.y;
+    x_(4) = a.z;
+    p_roll_ = a.x;
 
     // World-frame pose.
-    pos_x_ = msg->pose.pose.position.x;
-    pos_y_ = msg->pose.pose.position.y;
-    pos_z_ = msg->pose.pose.position.z;
+    pos_x_ = p.x;
+    pos_y_ = p.y;
+    pos_z_ = p.z;
 
-    tf2::Quaternion q(msg->pose.pose.orientation.x,
-                      msg->pose.pose.orientation.y,
-                      msg->pose.pose.orientation.z,
-                      msg->pose.pose.orientation.w);
+    tf2::Quaternion q(o.x, o.y, o.z, o.w);
+    if (q.length2() < 1e-6) q.setW(1.0);
+
+    // Transform WORLD velocities to BODY frame
+    // v_body = R_wb^T * v_world
+    tf2::Matrix3x3 Rwb(q);
+    tf2::Vector3 v_world(v.x, v.y, v.z);
+    tf2::Vector3 v_body = Rwb.transpose() * v_world;
+    tf2::Vector3 a_world(a.x, a.y, a.z);
+    tf2::Vector3 a_body = Rwb.transpose() * a_world;
+
+    x_(0) = v_body.x();
+    x_(1) = v_body.y();
+    x_(2) = v_body.z();
+    x_(3) = a_body.y(); // Pitch rate (q)
+    x_(4) = a_body.z(); // Yaw rate (r)
+    p_roll_ = a_body.x();
+
     tf2::Matrix3x3(q).getRPY(roll_, pitch_, yaw_);
   }
 
   void onReference(const std_msgs::msg::Float64MultiArray::SharedPtr m) {
     std::lock_guard<std::mutex> lk(mtx_);
-    // External reference override: switches us to manual mode and stops
-    // following the canned trajectory.
-    manual_ref_ = true;
+    // External reference override DISABLED for testing.
+    // manual_ref_ = true;
     for (std::size_t i = 0; i < m->data.size() && i < 5; ++i) {
       x_ref_(i) = m->data[i];
     }
@@ -210,18 +238,32 @@ class AUVController : public rclcpp::Node {
     // 1) Faults / priority matrix.
     updateFaults();
     allocator_.set_fault_factors(fault_);
+    fuzzy_.set_fault_factors(fault_);
 
     // 2) OUTER LOOP — pick current waypoint, compute body-frame velocity ref.
     if (!manual_ref_) updateReferenceFromTrajectory();
 
     // 3) INNER LOOP — T-S fuzzy state feedback.
     const ControlVec u_virtual = fuzzy_.compute(x_, x_ref_);
-    const WrenchVec  tau_des   = allocator_.B() * u_virtual;
+    
+    // Convert 4-dim u_virtual to 4-DOF Wrench (Fx, Fz, My, Mz)
+    WrenchVec tau_des_4d;
+    tau_des_4d(0) = u_virtual(0); // Fx
+    tau_des_4d(1) = u_virtual(1); // Fz
+    tau_des_4d(2) = u_virtual(2); // My
+    tau_des_4d(3) = u_virtual(3); // Mz
 
     int status = 0;
     const ControlVec u_cmd =
-        allocator_.allocate(tau_des, veh_.thrust_min, veh_.thrust_max, &status);
-    const WrenchVec tau_actual = allocator_.actual_wrench(u_cmd);
+        allocator_.allocate(tau_des_4d, veh_.thrust_min, veh_.thrust_max, &status);
+    
+    // Safety check: if u_cmd has NaNs, do not publish wrench
+    if ((u_cmd.array() != u_cmd.array()).any()) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "NaNs in u_cmd! Skipping wrench publish.");
+      return;
+    }
+
+    const WrenchVec tau_actual_4d = allocator_.actual_wrench(u_cmd);
 
     // 4) Hydrodynamics (drag + restoring + buoyancy).
     const Eigen::Vector3d buoy_body = buoyancyBodyFrame();
@@ -235,24 +277,32 @@ class AUVController : public rclcpp::Node {
         veh_.drag_q * x_(3) + veh_.drag_qq * std::abs(x_(3)) * x_(3),
         veh_.drag_r * x_(4) + veh_.drag_rr * std::abs(x_(4)) * x_(4));
 
-    // 5) Compose final body-frame wrench. Note that we publish the FULL
-    //    buoyancy force in body frame, NOT (buoyancy - mass*g).  Gazebo
-    //    applies gravity itself in world frame; if we subtracted mass*g
-    //    here too we would double-count and the AUV would sink to the
-    //    seabed (the symptom we observed in earlier runs).
+    // 5) Compose final body-frame wrench.
     geometry_msgs::msg::Wrench w;
-    w.force.x  = tau_actual(0) + buoy_body.x()  + drag_force.x();
-    w.force.y  = tau_actual(1) + buoy_body.y()  + drag_force.y();
-    w.force.z  = tau_actual(2) + buoy_body.z()  + drag_force.z();
-    w.torque.x = restore_M.x() + drag_moment.x();
-    w.torque.y = tau_actual(3) + restore_M.y() + drag_moment.y();
-    w.torque.z = tau_actual(4) + restore_M.z() + drag_moment.z();
-    pub_wrench_->publish(w);
+    
+    // Safety check: if speed is crazy high, kill power to prevent explosion
+    if (x_.segment<3>(0).norm() > 2.0 || std::abs(x_(4)) > 2.0) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "SPEED TOO HIGH! EMERGENCY BRAKE.");
+      pub_wrench_->publish(w); // publishes zeros
+      return;
+    }
+
+    w.force.x  = std::clamp(tau_actual_4d(0) + buoy_body.x()  + drag_force.x(), -500.0, 500.0);
+    w.force.y  = std::clamp(buoy_body.y() + drag_force.y(), -100.0, 100.0); // Only passive forces in Sway
+    w.force.z  = std::clamp(tau_actual_4d(1) + buoy_body.z()  + drag_force.z(), -500.0, 500.0);
+    w.torque.x = std::clamp(restore_M.x() + drag_moment.x(), -100.0, 100.0);
+    w.torque.y = std::clamp(tau_actual_4d(2) + restore_M.y() + drag_moment.y(), -100.0, 100.0);
+    w.torque.z = std::clamp(tau_actual_4d(3) + restore_M.z() + drag_moment.z(), -100.0, 100.0);
+
+    if (std::isfinite(w.force.x) && std::isfinite(w.force.y) && std::isfinite(w.force.z) &&
+        std::isfinite(w.torque.x) && std::isfinite(w.torque.y) && std::isfinite(w.torque.z)) {
+      pub_wrench_->publish(w);
+    }
 
     // 6) Diagnostics.
     publishVec(pub_u_,     {u_cmd(0),     u_cmd(1),     u_cmd(2),     u_cmd(3)});
-    publishVec(pub_taud_,  {tau_des(0),   tau_des(1),   tau_des(2),   tau_des(3), tau_des(4)});
-    publishVec(pub_taua_,  {tau_actual(0),tau_actual(1),tau_actual(2),tau_actual(3),tau_actual(4)});
+    publishVec(pub_taud_,  {tau_des_4d(0), 0.0, tau_des_4d(1), tau_des_4d(2), tau_des_4d(3)});
+    publishVec(pub_taua_,  {tau_actual_4d(0), 0.0, tau_actual_4d(1), tau_actual_4d(2), tau_actual_4d(3)});
     publishVec(pub_fault_, {fault_[0], fault_[1], fault_[2], fault_[3]});
     publishTargetPose();
     appendPath();
@@ -286,11 +336,11 @@ class AUVController : public rclcpp::Node {
       for (int row = 0; row < 4; ++row) {
         const double y = row * dy;
         if (row % 2 == 0) {
-          trajectory_.push_back({0.0, y, depth, 0.0});
           trajectory_.push_back({L,   y, depth, 0.0});
+          trajectory_.push_back({L,   y + dy*0.5, depth, 1.5708});
         } else {
-          trajectory_.push_back({L,   y, depth, 3.14159});
           trajectory_.push_back({0.0, y, depth, 3.14159});
+          trajectory_.push_back({0.0, y + dy*0.5, depth, 1.5708});
         }
       }
     } else if (name == "figure8") {
@@ -330,6 +380,8 @@ class AUVController : public rclcpp::Node {
 
     if (range_xy < waypoint_radius_) {
       wp_idx_ = (wp_idx_ + 1) % trajectory_.size();
+      RCLCPP_INFO(get_logger(), ">>> WAYPOINT %zu REACHED! Moving to next target.", wp_idx_);
+      fuzzy_.reset_integral();
     }
 
     const double bearing = std::atan2(dy, dx);
@@ -337,22 +389,24 @@ class AUVController : public rclcpp::Node {
     while (yaw_err >  3.14159) yaw_err -= 2 * 3.14159;
     while (yaw_err < -3.14159) yaw_err += 2 * 3.14159;
 
-    // u_ref: cruise speed scaled down when we have a big yaw error.
-    const double align = std::cos(yaw_err);
-    const double u_ref = std::clamp(
-        kp_surge_ * range_xy * std::max(align, 0.0),
-        0.0, cruise_speed_);
+    // u_ref: Improved LoS with asymptotic braking
+    // 1. Distance factor: slows down within 2.5m of waypoint
+    const double u_dist_factor = std::tanh(range_xy / 2.5);
+    // 2. Alignment factor: only move forward if nose is within +/- 90 deg of target
+    const double u_align_factor = std::pow(std::max(std::cos(yaw_err), 0.0), 2.0);
+    
+    const double u_ref = cruise_speed_ * u_dist_factor * u_align_factor;
 
     // Heave reference proportional to depth error (saturated).
-    const double w_ref = std::clamp(-kp_heave_ * dz, -0.4, 0.4);
+    const double w_ref = std::clamp(kp_heave_ * dz, -0.4, 0.4);
 
     // Yaw rate reference proportional to bearing error.
     const double r_ref = std::clamp(kp_yaw_ * yaw_err, -0.6, 0.6);
 
     x_ref_(0) = u_ref;
-    x_ref_(1) = 0.0;
+    x_ref_(1) = 0.0; // v (sway) always 0
     x_ref_(2) = w_ref;
-    x_ref_(3) = 0.0;
+    x_ref_(3) = 0.0; // q (pitch rate) ref 0
     x_ref_(4) = r_ref;
   }
 

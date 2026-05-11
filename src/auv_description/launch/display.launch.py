@@ -1,7 +1,7 @@
 # ROS2 launch: view the AUV URDF in RViz (no Gazebo).
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution, FindExecutable
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -16,7 +16,7 @@ def generate_launch_description():
     # parse the xacro-generated URDF as YAML.
     robot_description = {
         'robot_description': ParameterValue(
-            Command(['xacro ', xacro_path]), value_type=str)
+            Command([FindExecutable(name='xacro'), ' ', xacro_path]), value_type=str)
     }
 
     return LaunchDescription([

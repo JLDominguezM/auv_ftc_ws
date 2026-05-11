@@ -27,10 +27,10 @@ def _pick(context, *args, **kwargs):
              name='auv_controller', namespace='auv',
              parameters=[cfg, {'use_sim_time': use_sim_time}],
              output='screen'),
-        Node(package='auv_control', executable='reference_generator_node',
-             name='reference_generator', namespace='auv',
-             parameters=[cfg, {'use_sim_time': use_sim_time}],
-             output='screen'),
+        # Node(package='auv_control', executable='reference_generator_node',
+        #      name='reference_generator', namespace='auv',
+        #      parameters=[cfg, {'use_sim_time': use_sim_time}],
+        #      output='screen'),
     ]
 
 

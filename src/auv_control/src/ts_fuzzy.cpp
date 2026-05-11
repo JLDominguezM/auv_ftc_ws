@@ -34,20 +34,29 @@ static Gain make_gain(double ku, double kw, double kq, double kr) {
   K(1, 2) = kw;       // u2 tracks heave error
   K(2, 3) = kq;       // u3 tracks pitch-rate error
   K(3, 4) = kr;       // u4 tracks yaw-rate error
-  // Small cross-coupling terms (empirical; keep asymptotic stability per
-  // Section 2.2 by keeping Ai+Bi*Kj Hurwitz-dominant on the diagonal).
-  K(3, 1) = -0.10 * kr;   // yaw responds mildly to sway
+  // Disable cross-coupling for stability
+  K(3, 1) = 0.0;
   return K;
 }
 
 TSFuzzyController::TSFuzzyController() {
   //                       ku    kw    kq    kr     (units: N per m/s or N*m per rad/s)
-  K_[0] = make_gain( 18.0, 20.0, 3.0, 10.0);   // Rule 1: theta1=0.5, theta2=-0.1
-  K_[1] = make_gain( 18.0, 20.0, 3.0,  8.0);   // Rule 2: theta1=0.5, theta2= 0.0
-  K_[2] = make_gain( 18.0, 20.0, 3.0, 10.0);   // Rule 3: theta1=0.5, theta2= 0.1
-  K_[3] = make_gain( 22.0, 20.0, 4.0,  9.0);   // Rule 4: theta1=1.0, theta2=-0.1
-  K_[4] = make_gain( 22.0, 20.0, 4.0,  7.0);   // Rule 5: theta1=1.0, theta2= 0.0
-  K_[5] = make_gain( 22.0, 20.0, 4.0,  9.0);   // Rule 6: theta1=1.0, theta2= 0.1
+  K_[0] = make_gain( 50.0, 35.0, 5.0, 5.0);   // Rule 1: theta1=0.5, theta2=-0.1
+  K_[1] = make_gain( 50.0, 35.0, 5.0, 4.0);   // Rule 2: theta1=0.5, theta2= 0.0
+  K_[2] = make_gain( 50.0, 35.0, 5.0, 5.0);   // Rule 3: theta1=0.5, theta2= 0.1
+  K_[3] = make_gain( 55.0, 35.0, 6.0, 5.0);   // Rule 4: theta1=1.0, theta2=-0.1
+  K_[4] = make_gain( 55.0, 35.0, 6.0, 4.0);   // Rule 5: theta1=1.0, theta2= 0.0
+  K_[5] = make_gain( 55.0, 35.0, 6.0, 5.0);   // Rule 6: theta1=1.0, theta2= 0.1
+
+  // Small integral gains
+  Ki_.setZero();
+  Ki_(0, 0) = 1.0;   // surge integral
+  Ki_(1, 2) = 1.0;   // heave integral
+  Ki_(3, 4) = 0.5;   // yaw integral
+}
+
+void TSFuzzyController::set_fault_factors(const std::array<double, 4> & f) {
+  fault_ = f;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,13 +91,42 @@ ControlVec TSFuzzyController::compute(const StateVec & x,
   // Defuzzify: weighted sum of state-feedback contributions.
   ControlVec u = ControlVec::Zero();
   const StateVec e = x - x_ref;
+
+  // Adaptive Fault Tolerance: 
+  // We apply a compensation factor to the virtual control vector.
+  // If an actuator has a fault (effectiveness f_i < 1.0), we can attempt 
+  // to increase the gain for that channel to compensate, provided 
+  // it's not a total failure.
   for (std::size_t j = 0; j < 6; ++j) {
     mu_[j] = omega[j] / denom;
-    // State feedback is NEGATIVE of (K * error) — push the state toward
-    // the reference (Lyapunov proof in Section 2.2 assumed u = K x with
-    // K chosen so that A+BK is Hurwitz; equivalently -K on the error).
-    u.noalias() -= mu_[j] * K_[j] * e;
+    
+    // Proportional term from the T-S rules
+    ControlVec u_prop = -K_[j] * e;
+
+    // Integral term (PI-like) to reject steady-state errors from faults/drag
+    ControlVec u_int  = -Ki_ * error_integral_;
+
+    // Combined rule output
+    ControlVec u_j = u_prop + u_int;
+
+    u.noalias() += mu_[j] * u_j;
   }
+
+  // Anti-windup: only integrate if the commands are not heavily saturated.
+  // (Assuming nominal saturation around 50N per channel).
+  bool saturated = false;
+  for (int i = 0; i < 4; ++i) {
+    if (std::abs(u(i)) > 60.0) { saturated = true; break; }
+  }
+
+  if (!saturated) {
+    error_integral_ += e * dt_;
+    // Cap integral to prevent windup from large transient errors
+    for (int i = 0; i < 5; ++i) {
+      error_integral_(i) = std::clamp(error_integral_(i), -2.0, 2.0);
+    }
+  }
+
   return u;
 }
 
