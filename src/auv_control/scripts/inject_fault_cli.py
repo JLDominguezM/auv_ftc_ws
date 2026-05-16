@@ -23,8 +23,8 @@ from auv_control.srv import InjectFault
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--id",    type=int,   required=True, choices=[1, 2, 3, 4],
-                   help="thruster id (1..4) corresponding to u1..u4 in the paper")
+    p.add_argument("--id",    type=int,   required=True, choices=[1, 2, 3, 4, 5, 6],
+                   help="thruster id (1..6) in the X-6 layout (T1..T4 horiz, T5/T6 vert)")
     p.add_argument("--factor", type=float, required=True,
                    help="target fault factor f_i in [0, 1] (0 = total loss)")
     p.add_argument("--type",   choices=["abrupt", "slow"], default="abrupt")

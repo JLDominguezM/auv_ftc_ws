@@ -36,11 +36,11 @@ class ThrustAllocator {
  public:
   explicit ThrustAllocator(const AllocParams & geom);
 
-  // Set the current fault factor f_i ∈ [0, 1] for each of the 4 actuator
-  // channels. f_i = 1 is healthy, 0 is total loss. The priority weights
-  // are derived per Eq. (32):  w_i = exp(1/f_i - 1) for f_i > 0,
+  // Set the current fault factor f_i ∈ [0, 1] for each of the kNumThrusters
+  // actuator channels. f_i = 1 is healthy, 0 is total loss. The priority
+  // weights are derived per Eq. (32):  w_i = exp(1/f_i - 1) for f_i > 0,
   // and w_i = 1e12 (saturated) for f_i = 0.
-  void set_fault_factors(const std::array<double, 4> & f);
+  void set_fault_factors(const std::array<double, kNumThrusters> & f);
 
   // Core allocation entry point. Returns the 4-dim actuator command u,
   // best matching tau_des while respecting [u_min, u_max] box limits.
@@ -57,7 +57,7 @@ class ThrustAllocator {
   // Accounts for actuator-effectiveness reduction:  tau_actual = B * diag(f) * u.
   WrenchVec actual_wrench(const ControlVec & u_cmd) const;
 
-  const Eigen::Matrix<double, 4, 4> & B() const { return B_; }
+  const Eigen::Matrix<double, 4, 6> & B() const { return B_; }
 
   // Last-computed diagnostic info.
   std::string last_report() const { return report_; }
@@ -72,11 +72,11 @@ class ThrustAllocator {
                       double u_min, double u_max,
                       bool * converged) const;
 
-  AllocParams                geom_;
-  Eigen::Matrix<double, 4, 4> B_;
-  Eigen::Matrix<double, 4, 4> W_;     // priority matrix (diagonal)
-  std::array<double, 4>      fault_;  // f_1..f_4 in [0, 1]
-  mutable std::string        report_;
+  AllocParams                                       geom_;
+  Eigen::Matrix<double, 4, kNumThrusters>            B_;
+  Eigen::Matrix<double, kNumThrusters, kNumThrusters> W_;     // priority matrix (diagonal)
+  std::array<double, kNumThrusters>                  fault_;  // in [0, 1]
+  mutable std::string                                report_;
 };
 
 }  // namespace auv_control

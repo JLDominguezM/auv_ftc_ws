@@ -18,14 +18,14 @@ constexpr int    kMaxQPIter        = 40;
 // ---------------------------------------------------------------------------
 ThrustAllocator::ThrustAllocator(const AllocParams & geom) : geom_(geom) {
   B_ = build_B(geom);
-  W_ = Eigen::Matrix<double, 4, 4>::Identity();
-  fault_ = {1.0, 1.0, 1.0, 1.0};
+  W_ = Eigen::Matrix<double, kNumThrusters, kNumThrusters>::Identity();
+  fault_.fill(1.0);
 }
 
-void ThrustAllocator::set_fault_factors(const std::array<double, 4> & f) {
+void ThrustAllocator::set_fault_factors(const std::array<double, kNumThrusters> & f) {
   fault_ = f;
   W_.setZero();
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < kNumThrusters; ++i) {
     const double fi = std::clamp(f[i], 0.0, 1.0);
     double wi;
     if (fi <= 1.0e-6) {
@@ -44,14 +44,20 @@ void ThrustAllocator::set_fault_factors(const std::array<double, 4> & f) {
 //        u = W^{-1} B_eff^T (B_eff W^{-1} B_eff^T)^{-1} tau
 // ---------------------------------------------------------------------------
 ControlVec ThrustAllocator::pseudo_inverse(const WrenchVec & tau) const {
-  Eigen::Matrix<double, 4, 4> Beff = B_;
-  for (int j = 0; j < 4; ++j) Beff.col(j) *= fault_[j];
+  Eigen::Matrix<double, 4, kNumThrusters> Beff = B_;
+  for (int j = 0; j < kNumThrusters; ++j) Beff.col(j) *= fault_[j];
 
-  const Eigen::Matrix<double, 4, 4> Winv = W_.inverse();
-  const Eigen::Matrix<double, 4, 4> M    = Beff * Winv * Beff.transpose();
-  
-  // Use LDLT for the 4x4 square system.
-  const Eigen::Matrix<double, 4, 4> M_reg = M + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
+  // Inverse of the 6x6 diagonal priority matrix is also diagonal.
+  Eigen::Matrix<double, kNumThrusters, kNumThrusters> Winv =
+      Eigen::Matrix<double, kNumThrusters, kNumThrusters>::Zero();
+  for (int i = 0; i < kNumThrusters; ++i) {
+    Winv(i, i) = (W_(i, i) > 0.0) ? 1.0 / W_(i, i) : 0.0;
+  }
+
+  // M is 4x4 (wrench dimension); always small.
+  const Eigen::Matrix<double, 4, 4> M = Beff * Winv * Beff.transpose();
+  const Eigen::Matrix<double, 4, 4> M_reg =
+      M + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
   Eigen::Matrix<double, 4, 1> lambda = M_reg.ldlt().solve(tau);
   return Winv * Beff.transpose() * lambda;
 }
@@ -66,8 +72,8 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
                                      bool * converged) const {
   if (converged) *converged = false;
 
-  Eigen::Matrix<double, 4, 4> Beff = B_;
-  for (int j = 0; j < 4; ++j) Beff.col(j) *= fault_[j];
+  Eigen::Matrix<double, 4, kNumThrusters> Beff = B_;
+  for (int j = 0; j < kNumThrusters; ++j) Beff.col(j) *= fault_[j];
 
   // Start from the minimum-norm point of the effective system.
   const Eigen::Matrix<double, 4, 4> M0 = Beff * Beff.transpose() + 1e-6 * Eigen::Matrix<double, 4, 4>::Identity();
@@ -75,14 +81,15 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
   ControlVec v = Beff.transpose() * lambda;
 
   // Active bounds tracker: 0 = free, -1 = pinned at u_min, +1 = pinned at u_max.
-  std::array<int, 4> pin = {0, 0, 0, 0};
+  std::array<int, kNumThrusters> pin{};
+  pin.fill(0);
 
   for (int iter = 0; iter < kMaxQPIter; ++iter) {
     // -------- 1) Detect the worst bound violation. ------------------
     double worst_violation = 0.0;
     int    worst_idx       = -1;
     int    worst_sign      = 0;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kNumThrusters; ++i) {
       if (pin[i] != 0) continue;
       if (v(i) > u_max + 1e-9) {
         const double vio = v(i) - u_max;
@@ -96,7 +103,7 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
     if (worst_idx < 0) {
       const Eigen::Matrix<double, 4, 1> mu = lambda;
       bool removed = false;
-      for (int i = 0; i < 4; ++i) {
+      for (int i = 0; i < kNumThrusters; ++i) {
         if (pin[i] == 0) continue;
         const double bi_mu = Beff.col(i).dot(mu);
         const double dual  = v(i) - bi_mu;   // grad-of-lagrangian balance
@@ -113,13 +120,13 @@ ControlVec ThrustAllocator::solve_qp(const WrenchVec & tau_des,
 
     // -------- 2) Solve the reduced KKT system. ----------------------
     Eigen::Matrix<double, 4, 1> rhs = tau_des;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kNumThrusters; ++i) {
       if (pin[i] == +1) { v(i) = u_max; rhs -= Beff.col(i) * u_max; }
       if (pin[i] == -1) { v(i) = u_min; rhs -= Beff.col(i) * u_min; }
     }
 
     std::vector<int> free_idx;
-    for (int i = 0; i < 4; ++i) if (pin[i] == 0) free_idx.push_back(i);
+    for (int i = 0; i < kNumThrusters; ++i) if (pin[i] == 0) free_idx.push_back(i);
 
     if (free_idx.empty()) {
       if (converged) *converged = true;
@@ -167,7 +174,7 @@ ControlVec ThrustAllocator::allocate(const WrenchVec & tau_des,
   ControlVec u_qp = solve_qp(tau_des, u_min, u_max, &ok);
 
   // Safety clamp
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < kNumThrusters; ++i) {
     u_qp(i) = std::clamp(u_qp(i), u_min, u_max);
   }
 
@@ -182,7 +189,7 @@ ControlVec ThrustAllocator::allocate(const WrenchVec & tau_des,
 // ---------------------------------------------------------------------------
 WrenchVec ThrustAllocator::actual_wrench(const ControlVec & u_cmd) const {
   ControlVec u_eff;
-  for (int i = 0; i < 4; ++i) u_eff(i) = fault_[i] * u_cmd(i);
+  for (int i = 0; i < kNumThrusters; ++i) u_eff(i) = fault_[i] * u_cmd(i);
   return B_ * u_eff;
 }
 

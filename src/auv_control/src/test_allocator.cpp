@@ -27,11 +27,10 @@ static void print_vec(const char * label, const Eigen::VectorXd & v) {
 }
 
 static void run(const std::string & title,
-                const std::array<double, 4> & faults,
+                const std::array<double, kNumThrusters> & faults,
                 double u_min, double u_max) {
   std::cout << "\n==== " << title << " ====\n";
 
-  VehicleParams    veh;   (void)veh;
   AllocParams      geom;
   ThrustAllocator  alloc(geom);
   TSFuzzyController fuzzy;
@@ -42,15 +41,14 @@ static void run(const std::string & title,
   StateVec x;      x     << 0.8, 0.0, 0.0, 0.0, 0.05;
   StateVec x_ref;  x_ref << 0.8, 0.0, 0.0, 0.0, 0.00;   // command "stop turning"
 
-  const ControlVec u_virt   = fuzzy.compute(x, x_ref);
-  const WrenchVec  tau_des  = alloc.B() * u_virt;
+  const WrenchVec  tau_des  = fuzzy.compute(x, x_ref);
 
   int status = 0;
   const ControlVec u_cmd    = alloc.allocate(tau_des, u_min, u_max, &status);
   const WrenchVec  tau_act  = alloc.actual_wrench(u_cmd);
 
-  print_vec("fault factors", Eigen::Map<const Eigen::Vector4d>(faults.data()));
-  print_vec("u_virtual",     u_virt);
+  print_vec("fault factors",
+            Eigen::Map<const Eigen::Matrix<double, kNumThrusters, 1>>(faults.data()));
   print_vec("tau_des",       tau_des);
   print_vec("u_cmd (alloc)", u_cmd);
   print_vec("tau_actual",    tau_act);
@@ -62,42 +60,15 @@ static void run(const std::string & title,
 }
 
 int main() {
-  //                      u1   u2   u3   u4
-  run("A  Healthy",      {1.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
-  run("B  Abrupt u1 loss (f1=0)",
-                         {0.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
-  run("C  Same fault, tight bounds (hits QP)",
-                         {0.0, 1.0, 1.0, 1.0}, -20.0, 20.0);
-  run("D  Partial u3 loss (f3=0.3)",
-                         {1.0, 1.0, 0.3, 1.0}, -50.0, 50.0);
-
-  // --- Aggressive manoeuvre designed to saturate actuator bounds. ---
-  // Use a large reference error so the T-S fuzzy controller commands high
-  // virtual u; then tighten the bounds so the QP MUST intervene.
-  std::cout << "\n==== E  Aggressive manoeuvre, bounds force QP ====\n";
-  {
-    AllocParams      geom;
-    ThrustAllocator  alloc(geom);
-    TSFuzzyController fuzzy;
-    alloc.set_fault_factors({0.0, 1.0, 1.0, 1.0});    // u1 dead
-
-    StateVec x;      x     << 0.5, 0.0, 0.0, 0.0, 0.20;
-    StateVec x_ref;  x_ref << 1.0, 0.0, 0.5, 0.0, 0.00;    // big surge/heave/yaw demand
-
-    const auto u_virt  = fuzzy.compute(x, x_ref);
-    const auto tau_des = alloc.B() * u_virt;
-    int status = 0;
-    const auto u_cmd   = alloc.allocate(tau_des, -5.0, 5.0, &status);   // tight bounds
-    const auto tau_act = alloc.actual_wrench(u_cmd);
-
-    print_vec("u_virtual",     u_virt);
-    print_vec("tau_des",       tau_des);
-    print_vec("u_cmd (alloc)", u_cmd);
-    print_vec("tau_actual",    tau_act);
-    std::cout << "status = " << status << "   "
-              << alloc.last_report() << "\n"
-              << "tau error norm = "
-              << (tau_des - tau_act).norm() << "\n";
-  }
+  //                       T1   T2   T3   T4   T5   T6
+  run("A  Healthy",       {1.0, 1.0, 1.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
+  run("B  Kill T1 (horizontal BR)",
+                          {0.0, 1.0, 1.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
+  run("C  Kill T1+T3 (both starboard horizontals)",
+                          {0.0, 1.0, 0.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
+  run("D  Kill T5 (bow vertical)",
+                          {1.0, 1.0, 1.0, 1.0, 0.0, 1.0}, -50.0, 50.0);
+  run("E  Tight bounds + T1 dead (forces QP)",
+                          {0.0, 1.0, 1.0, 1.0, 1.0, 1.0}, -10.0, 10.0);
   return 0;
 }

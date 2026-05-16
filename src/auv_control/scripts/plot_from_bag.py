@@ -74,30 +74,30 @@ def read_bag(bag_path):
     return out
 
 
-def plot_fig5(data, outdir):
-    """Figure 5 — four virtual input channels u1..u4."""
+def plot_fig5(data, outdir, t_fault=None):
+    """Plot all virtual input channels (T1..Tn)."""
     if "virtual_u" not in data or data["virtual_u"][1].size == 0:
         print("[plot_from_bag] no virtual_u data — skipping Fig 5")
         return
     t, U = data["virtual_u"]
-    fig, axes = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+    n = U.shape[1]
+    fig, axes = plt.subplots(n, 1, figsize=(9, 1.6*n+1), sharex=True)
+    if n == 1:
+        axes = [axes]
     for i, ax in enumerate(axes):
         ax.plot(t, U[:, i], lw=1.2)
-        ax.set_ylabel(f"$u_{{{i+1}}}$")
+        ax.set_ylabel(f"$T_{{{i+1}}}$")
         ax.grid(True, alpha=0.3)
+        if t_fault is not None:
+            ax.axvline(t_fault, color="gray", ls=":", lw=1.0, alpha=0.8)
     axes[-1].set_xlabel("Simulation time [s]")
-    fig.suptitle("Fig 5 — Input signal for fuzzy controller")
+    fig.suptitle(f"Per-thruster commands (X-6 layout, n={n})")
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, "fig05_virtual_u.png"), dpi=140)
     plt.close(fig)
 
 
-def plot_fig67(data, outdir, which):
-    """Figures 6-7 — desired vs. actual wrench components.
-
-    which='force'   -> plot tau_x  (surge force, Fig 6)
-    which='moment'  -> plot tau_n  (yaw moment, Fig 7)
-    """
+def plot_fig67(data, outdir, which, t_fault=None):
     if "tau_des" not in data or data["tau_des"][1].size == 0:
         return
     td, TD = data["tau_des"]
@@ -106,19 +106,30 @@ def plot_fig67(data, outdir, which):
     label  = r"$\tau_x$ (surge force)" if which == "force" else r"$\tau_n$ (yaw moment)"
     name   = "fig06_force" if which == "force" else "fig07_moment"
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.plot(td, TD[:, idx], "b-",  lw=1.2, label="desired (fault-tolerant)")
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.plot(td, TD[:, idx], "b-",  lw=1.4, label="desired")
     ax.plot(ta, TA[:, idx], "r--", lw=1.2, label="actual")
-    # Mark the fault injection time used by scenario_runner.
-    ax.axvline(150.0, color="gray", ls=":", lw=1.0, alpha=0.8, label="fault @150s")
+    if t_fault is not None:
+        ax.axvline(t_fault, color="gray", ls=":", lw=1.0, alpha=0.8,
+                   label=f"fault @{t_fault:.0f}s")
     ax.set_xlabel("Simulation time [s]")
     ax.set_ylabel(label)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
-    ax.set_title(f"Fig {'6' if which == 'force' else '7'} — {label}")
+    ax.set_title(f"Wrench tracking — {label}")
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, f"{name}.png"), dpi=140)
     plt.close(fig)
+
+    # Tracking-error metric for the report.
+    if len(td) and len(ta):
+        # interpolate actual onto desired timestamps
+        TA_i = np.interp(td, ta, TA[:, idx])
+        err  = TD[:, idx] - TA_i
+        rms  = float(np.sqrt(np.mean(err**2)))
+        peak = float(np.max(np.abs(err)))
+        with open(os.path.join(outdir, f"{name}_metrics.txt"), "w") as fh:
+            fh.write(f"rms_error={rms:.4f}\npeak_error={peak:.4f}\n")
 
 
 def plot_fault_status(data, outdir):
@@ -143,6 +154,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--bag", required=True, help="rosbag2 directory")
     p.add_argument("--out", default="figs", help="output directory for PNGs")
+    p.add_argument("--t-fault", type=float, default=None,
+                   help="seconds at which a fault was injected (vertical line on plots)")
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -151,9 +164,9 @@ def main():
     for key, (t, v) in data.items():
         print(f"  {key}: {len(t)} samples, shape {v.shape}")
 
-    plot_fig5(data, args.out)
-    plot_fig67(data, args.out, "force")
-    plot_fig67(data, args.out, "moment")
+    plot_fig5(data, args.out, args.t_fault)
+    plot_fig67(data, args.out, "force",  args.t_fault)
+    plot_fig67(data, args.out, "moment", args.t_fault)
     plot_fault_status(data, args.out)
     print(f"[plot_from_bag] figures written to {args.out}/")
 

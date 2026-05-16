@@ -37,7 +37,8 @@
     .span-6{grid-column:span 12;} @media(min-width:900px) {.span-6{grid-column:span 6;}}
     .span-4{grid-column:span 12;} @media(min-width:1100px){.span-4{grid-column:span 4;}}
 
-    .fault-row{display:grid;gap:10px;grid-template-columns:repeat(4,1fr);}
+    .fault-row{display:grid;gap:10px;grid-template-columns:repeat(6,1fr);}
+    @media(max-width:1100px){.fault-row{grid-template-columns:repeat(3,1fr);}}
     .thruster{background:var(--panel2);border:1px solid var(--grid);
       border-radius:8px;padding:10px 12px;}
     .thruster .label{font-size:11px;color:var(--muted);text-transform:uppercase;}
@@ -130,27 +131,40 @@
 
   <!-- ==== Fault factors ==== -->
   <section class="card span-6">
-    <h2>Fault factors  <span style="color:var(--muted);font-weight:400;text-transform:none;">  /auv/fault_status</span></h2>
+    <h2>Fault factors  <span style="color:var(--muted);font-weight:400;text-transform:none;">  /auv/fault_status  &middot; top-down X-6 layout</span></h2>
+    <div style="position:relative;height:160px;background:#0a0d12;border:1px solid var(--grid);border-radius:8px;margin-bottom:10px;overflow:hidden;">
+      <canvas id="canvas-thrusters" style="width:100%;height:100%;display:block;"></canvas>
+    </div>
     <div class="fault-row">
       <div class="thruster" id="thr-1">
-        <div class="label">u1 (surge)</div><div class="value" id="f-1">1.00</div>
+        <div class="label">T1 (bow-R horiz)</div><div class="value" id="f-1">1.00</div>
         <div class="bar"><span id="b-1" style="width:100%"></span></div>
         <button data-id="1" class="btn-fail">Fail</button>
       </div>
       <div class="thruster" id="thr-2">
-        <div class="label">u2 (heave)</div><div class="value" id="f-2">1.00</div>
+        <div class="label">T2 (bow-L horiz)</div><div class="value" id="f-2">1.00</div>
         <div class="bar"><span id="b-2" style="width:100%"></span></div>
         <button data-id="2" class="btn-fail">Fail</button>
       </div>
       <div class="thruster" id="thr-3">
-        <div class="label">u3 (pitch)</div><div class="value" id="f-3">1.00</div>
+        <div class="label">T3 (stern-R horiz)</div><div class="value" id="f-3">1.00</div>
         <div class="bar"><span id="b-3" style="width:100%"></span></div>
         <button data-id="3" class="btn-fail">Fail</button>
       </div>
       <div class="thruster" id="thr-4">
-        <div class="label">u4 (yaw)</div><div class="value" id="f-4">1.00</div>
+        <div class="label">T4 (stern-L horiz)</div><div class="value" id="f-4">1.00</div>
         <div class="bar"><span id="b-4" style="width:100%"></span></div>
         <button data-id="4" class="btn-fail">Fail</button>
+      </div>
+      <div class="thruster" id="thr-5">
+        <div class="label">T5 (bow vert)</div><div class="value" id="f-5">1.00</div>
+        <div class="bar"><span id="b-5" style="width:100%"></span></div>
+        <button data-id="5" class="btn-fail">Fail</button>
+      </div>
+      <div class="thruster" id="thr-6">
+        <div class="label">T6 (stern vert)</div><div class="value" id="f-6">1.00</div>
+        <div class="bar"><span id="b-6" style="width:100%"></span></div>
+        <button data-id="6" class="btn-fail">Fail</button>
       </div>
     </div>
     <div class="toolbar" style="margin-top:10px">
@@ -206,12 +220,14 @@ function makeChart(id, datasets, yLabel) {
     }
   });
 }
-const COL=['#58a6ff','#3fb950','#d29922','#f85149'];
+const COL=['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#00d4d0'];
 const chartU = makeChart('chart-u',[
-  {label:'u1',data:[],borderColor:COL[0]},
-  {label:'u2',data:[],borderColor:COL[1]},
-  {label:'u3',data:[],borderColor:COL[2]},
-  {label:'u4',data:[],borderColor:COL[3]},
+  {label:'T1',data:[],borderColor:COL[0]},
+  {label:'T2',data:[],borderColor:COL[1]},
+  {label:'T3',data:[],borderColor:COL[2]},
+  {label:'T4',data:[],borderColor:COL[3]},
+  {label:'T5',data:[],borderColor:COL[4]},
+  {label:'T6',data:[],borderColor:COL[5]},
 ],'amplitude');
 const chartTauX = makeChart('chart-taux',[
   {label:'desired',data:[],borderColor:'#58a6ff'},
@@ -228,10 +244,16 @@ const chartZ = makeChart('chart-z',[
 
 function push(chart, t, values){
   chart.data.datasets.forEach((ds,i)=>{
-    if(values[i]===undefined) return;
+    if(values[i]===undefined || values[i]===null) return;
     ds.data.push({x:t, y:values[i]});
     if(ds.data.length>MAX_POINTS) ds.data.shift();
   });
+}
+function pushOne(chart, idx, t, value){
+  if(value===undefined || value===null) return;
+  const ds = chart.data.datasets[idx];
+  ds.data.push({x:t, y:value});
+  if(ds.data.length>MAX_POINTS) ds.data.shift();
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +394,140 @@ function niceGrid(span, divisions){
 setInterval(drawTraj, 200);
 
 // ---------------------------------------------------------------------------
+//  Top-down thruster schematic (X-6 layout)
+// ---------------------------------------------------------------------------
+const thrCanvas = document.getElementById('canvas-thrusters');
+const thrCtx    = thrCanvas.getContext('2d');
+let thrFactors  = [1,1,1,1,1,1];   // last known fault factors
+
+function lerpColor(f){
+  // f in [0,1]: 0=red, 0.5=amber, 1=green
+  const r = f < 0.5 ? 248 : Math.round(248 - (f-0.5)*2*(248-63));
+  const g = f < 0.5 ? Math.round(81 + f*2*(185-81)) : 185;
+  const b = f < 0.5 ? Math.round(73 - f*2*(73-80))  : 80;
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawThrusterSchematic(factors){
+  if(factors) thrFactors = factors;
+  const r = thrCanvas.parentElement.getBoundingClientRect();
+  thrCanvas.width  = r.width  * devicePixelRatio;
+  thrCanvas.height = r.height * devicePixelRatio;
+  const W = thrCanvas.width, H = thrCanvas.height;
+  const ctx = thrCtx;
+  ctx.clearRect(0,0,W,H);
+
+  // ----- Geometry of the AUV hull (top-down: x_body = horizontal axis) -----
+  const cx = W*0.5, cy = H*0.5;
+  const hullLen = W*0.55, hullWid = H*0.55;
+  const dpr = devicePixelRatio;
+
+  // Hull outline (rounded rectangle, bow on the right = +x)
+  const x0 = cx - hullLen/2, y0 = cy - hullWid/2;
+  const radius = hullWid*0.45;
+  ctx.fillStyle = '#161b22';
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1.5*dpr;
+  ctx.beginPath();
+  ctx.moveTo(x0+radius, y0);
+  ctx.lineTo(x0+hullLen-radius, y0);
+  ctx.quadraticCurveTo(x0+hullLen+radius*0.4, cy, x0+hullLen-radius, y0+hullWid);
+  ctx.lineTo(x0+radius, y0+hullWid);
+  ctx.quadraticCurveTo(x0-radius*0.4, cy, x0+radius, y0);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  // bow / stern labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = (11*dpr)+'px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText('bow  →', x0+hullLen-15*dpr, cy+4*dpr);
+  ctx.fillText('← stern', x0+25*dpr, cy+4*dpr);
+
+  // ----- Thruster positions (top-down view) -----
+  // T1 bow-right (starboard top in screen),  T2 bow-left (port bottom)
+  // T3 stern-right (stbd),                   T4 stern-left (port)
+  // T5 vertical bow (inside hull near +x),   T6 vertical stern (near -x)
+  const bowX  = x0 + hullLen*0.78;
+  const stnX  = x0 + hullLen*0.22;
+  const sbdY  = y0 + hullWid*0.10;   // starboard side (top of screen)
+  const portY = y0 + hullWid*0.90;   // port side
+  const midX5 = x0 + hullLen*0.62;
+  const midX6 = x0 + hullLen*0.38;
+  const midY  = cy;
+
+  const R    = Math.min(W,H)*0.08;
+  const Rv   = R*0.75;
+
+  const thrusters = [
+    {id:1, x:bowX, y:sbdY,  label:'T1', sub:'bow-R',  arrow:'h'},
+    {id:2, x:bowX, y:portY, label:'T2', sub:'bow-L',  arrow:'h'},
+    {id:3, x:stnX, y:sbdY,  label:'T3', sub:'stn-R',  arrow:'h'},
+    {id:4, x:stnX, y:portY, label:'T4', sub:'stn-L',  arrow:'h'},
+    {id:5, x:midX5,y:midY,  label:'T5', sub:'V-bow',  arrow:'v'},
+    {id:6, x:midX6,y:midY,  label:'T6', sub:'V-stn',  arrow:'v'},
+  ];
+
+  for(const t of thrusters){
+    const f = thrFactors[t.id-1] ?? 1.0;
+    const col = lerpColor(f);
+    const rad = (t.arrow==='v') ? Rv : R;
+
+    // Thrust direction arrow (horizontal motors point along +x; verticals
+    // are vertical screws — draw a cross to distinguish them).
+    ctx.strokeStyle = col;
+    ctx.fillStyle   = col;
+    ctx.lineWidth   = 2*dpr;
+    if(t.arrow==='h'){
+      // line through the circle along +x
+      ctx.beginPath();
+      ctx.moveTo(t.x - rad*1.4, t.y);
+      ctx.lineTo(t.x + rad*1.4, t.y);
+      ctx.stroke();
+      // arrowhead pointing forward (+x = right)
+      ctx.beginPath();
+      ctx.moveTo(t.x + rad*1.4, t.y);
+      ctx.lineTo(t.x + rad*1.0, t.y - 4*dpr);
+      ctx.lineTo(t.x + rad*1.0, t.y + 4*dpr);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // Body of the thruster
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, rad, 0, Math.PI*2);
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+    ctx.lineWidth = 1.5*dpr;
+    ctx.strokeStyle = '#0d1117';
+    ctx.stroke();
+
+    // Cross for vertical thrusters
+    if(t.arrow==='v'){
+      ctx.strokeStyle = '#0d1117';
+      ctx.lineWidth = 2*dpr;
+      ctx.beginPath();
+      ctx.moveTo(t.x-rad*0.6, t.y); ctx.lineTo(t.x+rad*0.6, t.y);
+      ctx.moveTo(t.x, t.y-rad*0.6); ctx.lineTo(t.x, t.y+rad*0.6);
+      ctx.stroke();
+    }
+
+    // Label
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold '+(11*dpr)+'px sans-serif';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillText(t.label, t.x, t.y);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = (9*dpr)+'px sans-serif';
+    ctx.fillText(f.toFixed(2), t.x, t.y + rad + 9*dpr);
+  }
+}
+window.addEventListener('resize', ()=>drawThrusterSchematic());
+drawThrusterSchematic();
+
+// ---------------------------------------------------------------------------
 //  ROS connection
 // ---------------------------------------------------------------------------
 let ros=null, subs=[], connected=false, paused=false;
@@ -407,22 +563,24 @@ function setupSubs(){
   subscribe('/auv/virtual_u','std_msgs/msg/Float64MultiArray',m=>{
     const t=now_s(); push(chartU,t,m.data); chartU.update('none'); msgCount++;
   });
-  let lastTauDes = null;
   subscribe('/auv/tau_des','std_msgs/msg/Float64MultiArray',m=>{
-    lastTauDes = m.data;
     const t=now_s();
-    push(chartTauX,t,[m.data[0],null]);
-    push(chartTauN,t,[m.data[4],null]);
+    pushOne(chartTauX, 0, t, m.data[0]);
+    pushOne(chartTauN, 0, t, m.data[4]);
+    chartTauX.update('none'); chartTauN.update('none');
   });
   subscribe('/auv/tau_actual','std_msgs/msg/Float64MultiArray',m=>{
     const t=now_s();
-    push(chartTauX,t,[null,m.data[0]]);
-    push(chartTauN,t,[null,m.data[4]]);
+    pushOne(chartTauX, 1, t, m.data[0]);
+    pushOne(chartTauN, 1, t, m.data[4]);
     chartTauX.update('none'); chartTauN.update('none');
   });
   subscribe('/auv/fault_status','std_msgs/msg/Float64MultiArray',m=>{
-    for(let i=0;i<4;i++){
+    const n = Math.min(m.data.length, 6);
+    const factors = new Array(6).fill(1.0);
+    for(let i=0;i<n;i++){
       const f=m.data[i];
+      factors[i] = f;
       document.getElementById('f-'+(i+1)).textContent=f.toFixed(2);
       document.getElementById('b-'+(i+1)).style.width=(f*100).toFixed(0)+'%';
       const el=document.getElementById('thr-'+(i+1));
@@ -430,6 +588,7 @@ function setupSubs(){
       if(f<=0.05) el.classList.add('failed');
       else if(f<0.95) el.classList.add('degraded');
     }
+    drawThrusterSchematic(factors);
   });
 
   // Vehicle odometry — drive readouts, vehicle marker, depth chart.
@@ -497,11 +656,11 @@ function callInjectFault(id, factor, type, ramp){
 }
 document.querySelectorAll('.btn-fail').forEach(b=>{
   b.addEventListener('click',()=>{
-    callInjectFault(parseInt(b.dataset.id,10), 0.5, 'abrupt', 0.0);
+    callInjectFault(parseInt(b.dataset.id,10), 0.0, 'abrupt', 0.0);
   });
 });
 document.getElementById('heal-all').addEventListener('click',()=>{
-  for(let i=1;i<=4;i++) callInjectFault(i, 1.0, 'abrupt', 0.0);
+  for(let i=1;i<=6;i++) callInjectFault(i, 1.0, 'abrupt', 0.0);
 });
 
 document.getElementById('connect-btn').addEventListener('click',()=>{

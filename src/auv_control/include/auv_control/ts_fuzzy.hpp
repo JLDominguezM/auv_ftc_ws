@@ -27,7 +27,7 @@
 
 namespace auv_control {
 
-using Gain = Eigen::Matrix<double, 4, 5>;   // K_j
+using Gain = Eigen::Matrix<double, 4, 5>;   // K_j  (wrench-shaped output)
 
 class TSFuzzyController {
  public:
@@ -36,11 +36,11 @@ class TSFuzzyController {
   // Compute sum_j mu_j(theta) * K_j * (x - x_ref)  — Eq. (13) of the paper.
   //   x       : current state [u v w q r]^T
   //   x_ref   : desired state [u_ref v_ref w_ref q_ref r_ref]^T
-  //   returns : virtual actuator command u_virtual (4-dim).
-  ControlVec compute(const StateVec & x, const StateVec & x_ref) const;
+  //   returns : desired body-frame wrench (4-dim: Fx, Fz, My, Mz).
+  WrenchVec compute(const StateVec & x, const StateVec & x_ref) const;
 
-  // Update fault factors to allow the controller to adapt its gains.
-  void set_fault_factors(const std::array<double, 4> & f);
+  // Update fault factors so the controller can adapt its behavior.
+  void set_fault_factors(const std::array<double, kNumThrusters> & f);
 
   // Set the control sampling period (for integral term).
   void set_dt(double dt) { dt_ = dt; }
@@ -73,8 +73,8 @@ class TSFuzzyController {
   // Cached membership weights mu_1..mu_6 from the last compute() call.
   mutable std::array<double, 6> mu_{};
 
-  // Fault factors [u1 u2 u3 u4], where 1.0=healthy, 0.0=total failure.
-  std::array<double, 4> fault_ = {1.0, 1.0, 1.0, 1.0};
+  // Fault factors [T1..T6], where 1.0=healthy, 0.0=total failure.
+  std::array<double, kNumThrusters> fault_{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
 
   // State error integral for the PI-like fuzzy law.
   mutable StateVec error_integral_ = StateVec::Zero();

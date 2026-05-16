@@ -210,9 +210,9 @@ class AUVController : public rclcpp::Node {
             std::shared_ptr<auv_control::srv::InjectFault::Response> rsp) {
     std::lock_guard<std::mutex> lk(mtx_);
     const int id = req->thruster_id;
-    if (id < 1 || id > 4) {
+    if (id < 1 || id > kNumThrusters) {
       rsp->accepted = false;
-      rsp->message  = "thruster_id must be in [1, 4]";
+      rsp->message  = "thruster_id out of range";
       return;
     }
     FaultRamp r;
@@ -243,20 +243,13 @@ class AUVController : public rclcpp::Node {
     // 2) OUTER LOOP — pick current waypoint, compute body-frame velocity ref.
     if (!manual_ref_) updateReferenceFromTrajectory();
 
-    // 3) INNER LOOP — T-S fuzzy state feedback.
-    const ControlVec u_virtual = fuzzy_.compute(x_, x_ref_);
-    
-    // Convert 4-dim u_virtual to 4-DOF Wrench (Fx, Fz, My, Mz)
-    WrenchVec tau_des_4d;
-    tau_des_4d(0) = u_virtual(0); // Fx
-    tau_des_4d(1) = u_virtual(1); // Fz
-    tau_des_4d(2) = u_virtual(2); // My
-    tau_des_4d(3) = u_virtual(3); // Mz
+    // 3) INNER LOOP — T-S fuzzy state feedback produces a desired body wrench.
+    const WrenchVec tau_des_4d = fuzzy_.compute(x_, x_ref_);
 
     int status = 0;
     const ControlVec u_cmd =
         allocator_.allocate(tau_des_4d, veh_.thrust_min, veh_.thrust_max, &status);
-    
+
     // Safety check: if u_cmd has NaNs, do not publish wrench
     if ((u_cmd.array() != u_cmd.array()).any()) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "NaNs in u_cmd! Skipping wrench publish.");
@@ -300,10 +293,10 @@ class AUVController : public rclcpp::Node {
     }
 
     // 6) Diagnostics.
-    publishVec(pub_u_,     {u_cmd(0),     u_cmd(1),     u_cmd(2),     u_cmd(3)});
+    publishVec(pub_u_,     {u_cmd(0), u_cmd(1), u_cmd(2), u_cmd(3), u_cmd(4), u_cmd(5)});
     publishVec(pub_taud_,  {tau_des_4d(0), 0.0, tau_des_4d(1), tau_des_4d(2), tau_des_4d(3)});
     publishVec(pub_taua_,  {tau_actual_4d(0), 0.0, tau_actual_4d(1), tau_actual_4d(2), tau_actual_4d(3)});
-    publishVec(pub_fault_, {fault_[0], fault_[1], fault_[2], fault_[3]});
+    publishVec(pub_fault_, {fault_[0], fault_[1], fault_[2], fault_[3], fault_[4], fault_[5]});
     publishTargetPose();
     appendPath();
 
@@ -311,10 +304,10 @@ class AUVController : public rclcpp::Node {
       RCLCPP_INFO(get_logger(),
         "pos=(%+.2f, %+.2f, %+.2f) yaw=%+.2f  "
         "x=[u=%+.2f w=%+.2f r=%+.2f]  ref=[u=%+.2f w=%+.2f r=%+.2f]  "
-        "u=[%+5.2f %+5.2f %+5.2f %+5.2f]  wp=%zu/%zu  status=%d",
+        "u=[%+5.1f %+5.1f %+5.1f %+5.1f %+5.1f %+5.1f]  wp=%zu/%zu  status=%d",
         pos_x_, pos_y_, pos_z_, yaw_,
         x_(0), x_(2), x_(4), x_ref_(0), x_ref_(2), x_ref_(4),
-        u_cmd(0), u_cmd(1), u_cmd(2), u_cmd(3),
+        u_cmd(0), u_cmd(1), u_cmd(2), u_cmd(3), u_cmd(4), u_cmd(5),
         wp_idx_, trajectory_.size(), status);
     }
   }
@@ -489,7 +482,7 @@ class AUVController : public rclcpp::Node {
   // ===== Helpers ========================================================
   void updateFaults() {
     const double t = now().seconds();
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kNumThrusters; ++i) {
       auto & r = ramps_[i];
       if (!r.active) continue;
       if (r.ramp_sec <= 1e-6) {
@@ -533,8 +526,8 @@ class AUVController : public rclcpp::Node {
   std::size_t wp_idx_ = 0;
   std::deque<geometry_msgs::msg::PoseStamped> path_buf_;
 
-  std::array<double, 4>    fault_ = {1.0, 1.0, 1.0, 1.0};
-  std::array<FaultRamp, 4> ramps_{};
+  std::array<double, kNumThrusters>    fault_{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  std::array<FaultRamp, kNumThrusters> ramps_{};
 
   std::mutex mtx_;
   std::size_t tick_ = 0;

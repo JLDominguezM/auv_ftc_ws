@@ -1,0 +1,45 @@
+
+==== A  Healthy ====
+fault factors   1.000   1.000   1.000   1.000   1.000   1.000   
+tau_des         0.000   0.000   0.000   -0.235  
+u_cmd (alloc)   0.196   -0.196  0.196   -0.196  0.000   0.000   
+tau_actual      0.000   0.000   0.000   -0.235  
+status = 0   (0=pinv, 1=QP OK, 2=QP best-effort)
+report : pinv OK   |u|_inf=0.195625
+tau error norm = 0.000
+
+==== B  Kill T1 (horizontal BR) ====
+fault factors   0.000   1.000   1.000   1.000   1.000   1.000   
+tau_des         0.000   0.000   0.000   -0.235  
+u_cmd (alloc)   0.000   -0.196  0.391   -0.196  0.000   0.000   
+tau_actual      -0.000  0.000   0.000   -0.235  
+status = 0   (0=pinv, 1=QP OK, 2=QP best-effort)
+report : pinv OK   |u|_inf=0.391248
+tau error norm = 0.000
+
+==== C  Kill T1+T3 (both starboard horizontals) ====
+fault factors   0.000   1.000   0.000   1.000   1.000   1.000   
+tau_des         0.000   0.000   0.000   -0.235  
+u_cmd (alloc)   0.000   -0.032  0.000   -0.032  0.000   0.000   
+tau_actual      -0.065  0.000   0.000   -0.019  
+status = 0   (0=pinv, 1=QP OK, 2=QP best-effort)
+report : pinv OK   |u|_inf=0.032305
+tau error norm = 0.225
+
+==== D  Kill T5 (bow vertical) ====
+fault factors   1.000   1.000   1.000   1.000   0.000   1.000   
+tau_des         0.000   0.000   0.000   -0.235  
+u_cmd (alloc)   0.196   -0.196  0.196   -0.196  0.000   0.000   
+tau_actual      0.000   0.000   0.000   -0.235  
+status = 0   (0=pinv, 1=QP OK, 2=QP best-effort)
+report : pinv OK   |u|_inf=0.195625
+tau error norm = 0.000
+
+==== E  Tight bounds + T1 dead (forces QP) ====
+fault factors   0.000   1.000   1.000   1.000   1.000   1.000   
+tau_des         0.000   0.000   0.000   -0.235  
+u_cmd (alloc)   0.000   -0.196  0.391   -0.196  0.000   0.000   
+tau_actual      -0.000  0.000   0.000   -0.235  
+status = 0   (0=pinv, 1=QP OK, 2=QP best-effort)
+report : pinv OK   |u|_inf=0.391248
+tau error norm = 0.000

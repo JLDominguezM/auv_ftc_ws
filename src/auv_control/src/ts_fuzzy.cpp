@@ -55,15 +55,15 @@ TSFuzzyController::TSFuzzyController() {
   Ki_(3, 4) = 0.5;   // yaw integral
 }
 
-void TSFuzzyController::set_fault_factors(const std::array<double, 4> & f) {
+void TSFuzzyController::set_fault_factors(const std::array<double, kNumThrusters> & f) {
   fault_ = f;
 }
 
 // ---------------------------------------------------------------------------
 //  compute() — Eq. (13)
 // ---------------------------------------------------------------------------
-ControlVec TSFuzzyController::compute(const StateVec & x,
-                                      const StateVec & x_ref) const {
+WrenchVec TSFuzzyController::compute(const StateVec & x,
+                                     const StateVec & x_ref) const {
   const double th1 = x(0);   // theta1 = surge speed u
   const double th2 = x(4);   // theta2 = yaw rate r
 
@@ -89,31 +89,23 @@ ControlVec TSFuzzyController::compute(const StateVec & x,
   if (denom < 1e-9) denom = 1.0;          // numerical floor
 
   // Defuzzify: weighted sum of state-feedback contributions.
-  ControlVec u = ControlVec::Zero();
+  WrenchVec u = WrenchVec::Zero();
   const StateVec e = x - x_ref;
 
-  // Adaptive Fault Tolerance: 
-  // We apply a compensation factor to the virtual control vector.
-  // If an actuator has a fault (effectiveness f_i < 1.0), we can attempt 
-  // to increase the gain for that channel to compensate, provided 
-  // it's not a total failure.
   for (std::size_t j = 0; j < 6; ++j) {
     mu_[j] = omega[j] / denom;
-    
+
     // Proportional term from the T-S rules
-    ControlVec u_prop = -K_[j] * e;
+    WrenchVec u_prop = -K_[j] * e;
 
     // Integral term (PI-like) to reject steady-state errors from faults/drag
-    ControlVec u_int  = -Ki_ * error_integral_;
+    WrenchVec u_int  = -Ki_ * error_integral_;
 
-    // Combined rule output
-    ControlVec u_j = u_prop + u_int;
-
-    u.noalias() += mu_[j] * u_j;
+    u.noalias() += mu_[j] * (u_prop + u_int);
   }
 
-  // Anti-windup: only integrate if the commands are not heavily saturated.
-  // (Assuming nominal saturation around 50N per channel).
+  // Anti-windup: only integrate if the commanded wrench is not heavily
+  // saturated (rough envelope on wrench magnitude).
   bool saturated = false;
   for (int i = 0; i < 4; ++i) {
     if (std::abs(u(i)) > 60.0) { saturated = true; break; }
