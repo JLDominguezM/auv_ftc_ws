@@ -166,10 +166,10 @@ lo que la X-6 aporta.
 
 | DOF | Motores que aportan | ¿Sobrevive una falla? | ¿Sobrevive doble? |
 |-----|---------------------|------------------------|--------------------|
-| Surge (Fx)  | T1, T2, T3, T4       | ✅ 3 motores quedan    | ✅ 2 motores |
-| Heave (Fz)  | T5, T6                | ✅ 50% de autoridad   | ❌ pierde heave |
-| Pitch (My)  | T5, T6 (signos opuestos) | ⚠️ acoplamiento con heave | ❌ |
-| Yaw (Mz)    | T1−T4 (signos alternados) | ✅ 3 con signos mixtos | ✅ típicamente |
+| Surge (Fx)  | T1, T2, T3, T4       | 3 motores quedan    | 2 motores |
+| Heave (Fz)  | T5, T6                | 50% de autoridad   | pierde heave |
+| Pitch (My)  | T5, T6 (signos opuestos) | acoplamiento con heave | No |
+| Yaw (Mz)    | T1−T4 (signos alternados) | 3 con signos mixtos | típicamente |
 
 La configuración X-6 da **redundancia 4×** en surge y yaw — donde más se
 necesita porque son los DOFs que dominan la navegación 2-D.
