@@ -390,9 +390,18 @@ incluso con 3 motores muertos.
 - **Gazebo Classic** llega EOL en enero 2025; migrar a Gazebo Sim
   (Garden / Harmonic) cuando se actualice ROS 2.
 
+
 ---
 
-## 7. Referencias
+## 7. Conclusiones
+
+- **Validación de la tolerancia a fallas (FTC):** La combinación del diseño geométrico **X-6** y el asignador basado en **Programación Cuadrática (QP) con active-set** demostró ser altamente efectiva. El sistema es capaz de mantener el error de *wrench* en $0.000$ ante la pérdida total de un motor horizontal (como T1), redistribuyendo la carga de manera óptima y automática hacia los actuadores sanos sin degradar el control cinemático.
+-  **Límites de controlabilidad y redundancia:** Las pruebas experimentales delimitaron con éxito las fronteras físicas del vehículo. Mientras que el sistema absorbe con robustez escenarios críticos de triple falla (T1, T2 y T5 caídos), la pérdida simétrica en un mismo costado (como T1 y T3) induce una condición de rango deficiente (*rank-deficient*). En este punto, el allocator pasa de forma segura a un comportamiento de mínimos cuadrados, mitigando el impacto pero evidenciando el límite físico de la configuración de 6 motores.
+-  **Robustez del lazo cerrado:** Los resultados en simulación dinámica confirman que el controlador *T-S Fuzzy State-Feedback* absorbe los transitorios abruptos derivados de la inyección de fallas en tiempo real. El guiado en lazo cerrado logra mantener el seguimiento de trayectoria y una regulación de profundidad constante a $-3.0\text{ m}$ incluso bajo severa pérdida de autoridad de empuje.
+
+---
+
+## 8. Referencias
 
 - Zhang, Z.; Wu, Y.; Zhou, Y.; Hu, D. *Fault-Tolerant Control of
   Autonomous Underwater Vehicle Actuators Based on Takagi and Sugeno
